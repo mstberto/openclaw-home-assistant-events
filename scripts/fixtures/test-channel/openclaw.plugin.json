@@ -1,0 +1,1 @@
+{"id":"ha-events-test-channel","name":"Synthetic test channel","channels":["ha-test"],"configSchema":{"type":"object","properties":{}}}
