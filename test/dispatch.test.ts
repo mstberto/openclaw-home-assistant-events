@@ -2,18 +2,48 @@ import type { OpenClawPluginApi } from 'openclaw/plugin-sdk/core';
 import { expect, it, vi } from 'vitest';
 import { createDispatcher } from '../src/dispatch.js';
 import type { Delivery } from '../src/model.js';
+const source = { sessionKey: 'agent:main:telegram:direct:123', sessionId: '11111111-1111-4111-8111-111111111111', senderId: '123', senderIsOwner: false, channel: 'telegram', accountId: 'personal', target: '123', threadId: 9 };
 const delivery: Delivery = { id: 'stable-id', subscriptionId: 'subscription', agentId: 'main', entityId: 'sensor.test', instruction: 'Report the event',
-  previousState: 'off', currentState: 'on', occurredAt: 0, oneShot: true, attempts: 0, nextAttemptAt: 0, status: 'pending' };
-it('uses only public isolated dispatch with stable dedup and no automatic destination', async () => {
-  const run = vi.fn(async () => ({ runId: 'run' }));
-  const waitForRun = vi.fn(async () => ({ status: 'timeout' }));
-  const api = { runtime: { subagent: { run, waitForRun } } } as unknown as OpenClawPluginApi;
-  const controller = new AbortController(); const dispatcher = createDispatcher(api, controller.signal);
-  await dispatcher.submit(delivery);
-  const params = (run.mock.calls as unknown as Array<[Record<string, unknown>]>)[0]![0];
-  expect(params.deliver).toBe(false); expect(params.sessionKey).toBe('agent:main:subagent:ha-events-stable-id');
-  expect(params.idempotencyKey).toBe('ha-events:stable-id'); expect(params).not.toHaveProperty('completionDelivery');
-  expect(params.message).toContain('"subscription":'); expect(params.message).toContain('"event":');
-  expect(await dispatcher.observe('run')).toBe('pending');
-  controller.abort(); await expect(dispatcher.submit(delivery)).rejects.toThrow(); expect(run).toHaveBeenCalledTimes(1);
+  previousState: 'off', currentState: 'on', occurredAt: 0, oneShot: true, attempts: 0, nextAttemptAt: 0, status: 'pending', source };
+type Params = Parameters<OpenClawPluginApi['runtime']['agent']['runEmbeddedAgent']>[0];
+function fixture(action: (params: Params) => void | Promise<void> = () => {}) {
+  const run = vi.fn(async (params: Params) => { await action(params); return { meta: {} }; });
+  const entry = { sessionId: source.sessionId };
+  const api = { config: {}, runtime: { agent: { runEmbeddedAgent: run,
+    resolveAgentWorkspaceDir: () => '/tmp/synthetic', resolveAgentTimeoutMs: () => 10000,
+    session: { getSessionEntry: vi.fn(() => entry) } } } } as unknown as OpenClawPluginApi;
+  const controller = new AbortController();
+  return { run, api, entry, controller, dispatcher: createDispatcher(api, controller.signal) };
+}
+const receipt = (params: Params) => params.onUserMessagePersisted?.({ role: 'user', content: params.prompt, timestamp: 0 });
+it('continues the exact originating session with captured sender policy and no elevated grants', async () => {
+  const { dispatcher, run } = fixture(receipt);
+  expect(await dispatcher.prepare(delivery).execute('run')).toEqual({ persisted: true });
+  const params = run.mock.calls[0]![0];
+  expect(params.sessionKey).toBe(source.sessionKey); expect(params.sessionId).toBe(source.sessionId);
+  expect(params.senderId).toBe('123'); expect(params.senderIsOwner).toBe(false); expect(params.agentAccountId).toBe('personal');
+  expect(params.messageTo).toBe('123'); expect(params.messageThreadId).toBe(9);
+  expect(params).not.toHaveProperty('forceMessageTool'); expect(params).not.toHaveProperty('runtimePluginToolGrant');
+  expect(params.prompt).toContain('"subscription":'); expect(params.prompt).toContain('"event":');
+});
+it('does not confuse model completion with transcript delivery', async () => {
+  const { dispatcher } = fixture();
+  expect(await dispatcher.prepare(delivery).execute('run')).toEqual({ persisted: false });
+});
+it('recognizes persistence even if the agent fails later, but honors invalidation', async () => {
+  const success = fixture(params => { receipt(params); throw new Error('model failed'); });
+  expect(await success.dispatcher.prepare(delivery).execute('run')).toEqual({ persisted: true });
+  const invalidated = fixture(params => { receipt(params); params.onUserMessagePersistenceInvalidated?.(); });
+  expect(await invalidated.dispatcher.prepare(delivery).execute('run')).toEqual({ persisted: false });
+});
+it('rejects legacy, cross-agent, reset, or cancelled sessions before invocation', async () => {
+  const { dispatcher, entry, controller, run } = fixture();
+  const legacy = { ...delivery }; delete legacy.source;
+  expect(() => dispatcher.prepare(legacy)).toThrow('Legacy');
+  expect(() => dispatcher.prepare({ ...delivery, agentId: 'other' })).toThrow('mismatch');
+  const prepared = dispatcher.prepare(delivery);
+  entry.sessionId = '22222222-2222-4222-8222-222222222222';
+  await expect(prepared.execute('run')).rejects.toThrow('reset or deleted');
+  controller.abort(); expect(() => dispatcher.prepare(delivery)).toThrow('stopping');
+  expect(run).not.toHaveBeenCalled();
 });

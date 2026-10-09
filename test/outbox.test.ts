@@ -1,49 +1,95 @@
 import { describe, it, expect, vi } from 'vitest';
 import { Engine } from '../src/engine.js';
-import { Outbox } from '../src/outbox.js';
+import { DispatchPreflightError, Outbox } from '../src/outbox.js';
 import { setup, state, event, time } from './helpers.js';
 async function queued() {
   const fixture = setup(); const engine = new Engine(fixture.repository, ['main'], () => time);
-  await engine.subscribe('main', { entityId: 'sensor.test', trigger: { type: 'state', to: 'on' }, instruction: 'Report event' });
+  await engine.subscribe('main', { entityId: 'sensor.test', trigger: { type: 'state', to: 'on' }, instruction: 'Report event' }, undefined,
+    { sessionKey: 'agent:main:main', sessionId: '11111111-1111-4111-8111-111111111111', senderIsOwner: false });
   await engine.snapshot([state('off', time - 1)]); await engine.event(event('off','on', time + 1));
-  return fixture;
+  return { ...fixture, engine };
 }
-describe('durable outbox', () => {
-  it('persists accepted run IDs, observes completion after restart, and does not submit twice', async () => {
-    const { repository } = await queued(); let now = time;
-    const dispatcher = { submit: vi.fn(async () => ({ runId: 'run-1' })), observe: vi.fn(async () => 'ok' as const) };
-    await new Outbox(repository, dispatcher, ['main'], () => now).drain();
-    expect((await repository.read()).deliveries[0]?.runId).toBe('run-1'); now += 1000;
-    await new Outbox(repository, dispatcher, ['main'], () => now).drain();
-    expect(dispatcher.submit).toHaveBeenCalledTimes(1); expect((await repository.read()).deliveries).toHaveLength(0);
+function dispatcher(action: () => Promise<{ persisted: boolean }> = async () => ({ persisted: true })) {
+  const execute = vi.fn(action); return { prepare: vi.fn(() => ({ execute })), execute };
+}
+describe('handoff outbox', () => {
+  it('commits running before effects, retains delivered history, and never replays it', async () => {
+    const { repository } = await queued();
+    const dispatch = dispatcher(async () => { expect((await repository.read()).deliveries[0]?.status).toBe('running'); return { persisted: true }; });
+    await new Outbox(repository, dispatch, ['main'], () => time).drain();
+    const restarted = new Outbox(repository, dispatch, ['main'], () => time + 1000);
+    await restarted.recover(); await restarted.drain();
+    expect(dispatch.execute).toHaveBeenCalledTimes(1); expect((await repository.read()).deliveries[0]?.status).toBe('delivered');
   });
-  it('retries failed admission with the same event ID and caps attempts', async () => {
+  it('retries only preflight failures and caps attempts', async () => {
     const { repository } = await queued(); let now = time;
-    const dispatcher = { submit: vi.fn(async () => { throw new Error('offline'); }), observe: vi.fn(async () => 'pending' as const) };
-    const outbox = new Outbox(repository, dispatcher, ['main'], () => now);
-    await outbox.drain(); await outbox.drain(); expect(dispatcher.submit).toHaveBeenCalledTimes(1);
+    const dispatch = dispatcher(); dispatch.prepare.mockImplementation(() => { throw new DispatchPreflightError('offline'); });
+    const outbox = new Outbox(repository, dispatch, ['main'], () => now);
+    await outbox.drain(); await outbox.drain(); expect(dispatch.prepare).toHaveBeenCalledTimes(1);
     for (let i = 1; i < 12; i++) { now += 300001; await outbox.drain(); }
-    expect((await repository.read()).deliveries[0]?.status).toBe('failed');
-    const ids = dispatcher.submit.mock.calls as unknown as Array<[{ id: string }]>;
-    expect(new Set(ids.map(call => call[0].id)).size).toBe(1);
+    expect((await repository.read()).deliveries[0]?.status).toBe('failed'); expect(dispatch.execute).not.toHaveBeenCalled();
   });
-  it('does not resubmit accepted runs on observation timeout or terminal failure', async () => {
-    const { repository } = await queued(); let now = time;
-    const dispatcher = { submit: vi.fn(async () => ({ runId: 'run' })), observe: vi.fn(async () => 'pending' as 'pending' | 'error') };
-    const outbox = new Outbox(repository, dispatcher, ['main'], () => now);
-    await outbox.drain(); now += 1000; await outbox.drain();
-    expect((await repository.read()).deliveries[0]?.status).toBe('accepted');
-    dispatcher.observe.mockResolvedValue('error'); now += 30000; await outbox.drain();
-    expect((await repository.read()).deliveries[0]?.status).toBe('failed'); expect(dispatcher.submit).toHaveBeenCalledTimes(1);
+  it('marks a completed run without persistence evidence uncertain; no automatic replay', async () => {
+    const { repository } = await queued(); const dispatch = dispatcher(async () => ({ persisted: false }));
+    const outbox = new Outbox(repository, dispatch, ['main'], () => time);
+    await outbox.drain(); await outbox.drain(); expect(dispatch.execute).toHaveBeenCalledTimes(1);
+    expect((await repository.read()).deliveries[0]?.status).toBe('uncertain');
+  });
+  it('converts interrupted running and legacy accepted records to uncertain on startup', async () => {
+    const { repository } = await queued(); const dispatch = dispatcher();
+    for (const status of ['running', 'accepted'] as const) {
+      await repository.transact(doc => { doc.deliveries[0]!.status = status; });
+      const outbox = new Outbox(repository, dispatch, ['main'], () => time);
+      await outbox.recover(); await outbox.drain(); expect((await repository.read()).deliveries[0]?.status).toBe('uncertain');
+    }
+    expect(dispatch.execute).not.toHaveBeenCalled();
+  });
+  it('requires manual duplicate-risk acknowledgement and enforces review ownership', async () => {
+    const { repository, engine } = await queued(); const dispatch = dispatcher(async () => ({ persisted: false }));
+    const outbox = new Outbox(repository, dispatch, ['main'], () => time); await outbox.drain();
+    const id = (await repository.read()).deliveries[0]!.id;
+    await expect(engine.resolveDelivery('main', id, 'retry', false)).rejects.toThrow('acknowledgement');
+    await expect(engine.resolveDelivery('other', id, 'dismissed', false)).rejects.toThrow('allowed');
+    await engine.resolveDelivery('main', id, 'retry', true); await outbox.drain(); expect(dispatch.execute).toHaveBeenCalledTimes(2);
+    await engine.resolveDelivery('main', id, 'delivered', false); await outbox.drain(); expect(dispatch.execute).toHaveBeenCalledTimes(2);
+    expect((await repository.read()).deliveries[0]?.reviews).toBe(2);
   });
   it('never dispatches to an agent removed from the allowlist', async () => {
-    const { repository } = await queued(); const dispatcher = { submit: vi.fn(async () => ({ runId: 'run' })), observe: vi.fn(async () => 'ok' as const) };
-    await new Outbox(repository, dispatcher, [], () => time).drain(); expect(dispatcher.submit).not.toHaveBeenCalled();
+    const { repository } = await queued(); const dispatch = dispatcher();
+    await new Outbox(repository, dispatch, [], () => time).drain(); expect(dispatch.execute).not.toHaveBeenCalled();
   });
-  it('does not mark admission as rejected when receipt persistence fails', async () => {
-    const { repository, store } = await queued();
-    const dispatcher = { submit: vi.fn(async () => { store.fail = true; return { runId: 'run' }; }), observe: vi.fn(async () => 'ok' as const) };
-    await expect(new Outbox(repository, dispatcher, ['main'], () => time).drain()).rejects.toThrow('disk');
-    expect(store.document?.deliveries[0]?.attempts).toBe(0);
+  it('does not execute if the running reservation cannot be saved', async () => {
+    const { repository, store } = await queued(); const dispatch = dispatcher(); store.fail = true;
+    await expect(new Outbox(repository, dispatch, ['main'], () => time).drain()).rejects.toThrow('disk');
+    expect(dispatch.execute).not.toHaveBeenCalled(); expect(store.document?.deliveries[0]?.status).toBe('pending');
+  });
+  it('leaves a failed final write running; restart marks uncertain and never repeats the effect', async () => {
+    const { repository, store } = await queued(); const dispatch = dispatcher(async () => { store.fail = true; return { persisted: true }; });
+    await expect(new Outbox(repository, dispatch, ['main'], () => time).drain()).rejects.toThrow('disk');
+    expect(store.document?.deliveries[0]?.status).toBe('running'); store.fail = false;
+    const restarted = new Outbox(repository, dispatch, ['main'], () => time); await restarted.recover(); await restarted.drain();
+    expect((await repository.read()).deliveries[0]?.status).toBe('uncertain'); expect(dispatch.execute).toHaveBeenCalledTimes(1);
+  });
+  it('preserves uncertain work when its watcher is removed', async () => {
+    const { repository, engine } = await queued(); const dispatch = dispatcher(async () => ({ persisted: false }));
+    await new Outbox(repository, dispatch, ['main'], () => time).drain();
+    await engine.remove('main', (await repository.read()).subscriptions[0]!.id);
+    expect((await repository.read()).deliveries[0]?.status).toBe('uncertain');
+  });
+  it('rejects review from another allowed agent and while execution is running', async () => {
+    const { repository } = await queued(); const engine = new Engine(repository, ['main', 'other'], () => time);
+    const id = (await repository.read()).deliveries[0]!.id;
+    await repository.transact(doc => { doc.deliveries[0]!.status = 'uncertain'; });
+    await expect(engine.resolveDelivery('other', id, 'dismissed', false)).rejects.toThrow('owned');
+    await repository.transact(doc => { doc.deliveries[0]!.status = 'running'; });
+    await expect(engine.resolveDelivery('main', id, 'retry', true)).rejects.toThrow('Only');
+  });
+  it('does not invoke an event removed during preflight', async () => {
+    const { repository, engine } = await queued(); const dispatch = dispatcher();
+    const id = (await repository.read()).subscriptions[0]!.id;
+    let removal: Promise<boolean> | undefined;
+    dispatch.prepare.mockImplementation(() => { removal = engine.remove('main', id); return { execute: dispatch.execute }; });
+    await new Outbox(repository, dispatch, ['main'], () => time).drain(); await removal;
+    expect(dispatch.execute).not.toHaveBeenCalled(); expect((await repository.read()).deliveries).toHaveLength(0);
   });
 });
