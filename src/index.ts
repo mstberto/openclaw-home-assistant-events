@@ -4,7 +4,6 @@ import { definePluginEntry, buildJsonPluginConfigSchema } from 'openclaw/plugin-
 import { z } from 'zod';
 import { sourceSessionSchema, type SourceSession } from './model.js';
 import { parseRuntimeConfig } from './config.js';
-import { getPreparedPluginSecretInput } from 'openclaw/plugin-sdk/secret-input-runtime';
 import { createDispatcher } from './dispatch.js';
 import { Engine } from './engine.js';
 import { Outbox } from './outbox.js';
@@ -87,8 +86,10 @@ function register(api: OpenClawPluginApi): void {
     reload: { configPrefixes: ['plugins.entries.openclaw-home-assistant-events.config'] },
     async start(context) {
       const authored = context.config.plugins?.entries?.['openclaw-home-assistant-events']?.config ?? api.pluginConfig;
-      const prepared = getPreparedPluginSecretInput('openclaw-home-assistant-events', 'accessToken');
-      const config = parseRuntimeConfig(authored, prepared.value);
+      // During replacement activation the global snapshot still belongs to the previous
+      // generation. The candidate API already carries its validated runtime config.
+      const candidateToken = api.pluginConfig?.accessToken;
+      const config = parseRuntimeConfig(authored, typeof candidateToken === 'string' ? candidateToken : undefined);
       scheduler = new ServiceScheduler();
       const configuredAgents = new Set(Object.keys(context.config.agents?.entries ?? {}));
       // The implicit default agent is main when no explicit list is configured.
