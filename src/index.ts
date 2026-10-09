@@ -3,7 +3,8 @@ import { readFileSync } from 'node:fs';
 import { definePluginEntry, buildJsonPluginConfigSchema } from 'openclaw/plugin-sdk/plugin-entry';
 import { z } from 'zod';
 import { sourceSessionSchema, type SourceSession } from './model.js';
-import { configSchema } from './config.js';
+import { parseRuntimeConfig } from './config.js';
+import { getPreparedPluginSecretInput } from 'openclaw/plugin-sdk/secret-input-runtime';
 import { createDispatcher } from './dispatch.js';
 import { Engine } from './engine.js';
 import { Outbox } from './outbox.js';
@@ -85,8 +86,9 @@ function register(api: OpenClawPluginApi): void {
   api.registerService({ id: 'home-assistant-events',
     reload: { configPrefixes: ['plugins.entries.openclaw-home-assistant-events.config'] },
     async start(context) {
-      // Host materializes declared SecretRefs before handing runtime config to the plugin.
-      const config = configSchema.parse(context.config.plugins?.entries?.['openclaw-home-assistant-events']?.config ?? api.pluginConfig);
+      const authored = context.config.plugins?.entries?.['openclaw-home-assistant-events']?.config ?? api.pluginConfig;
+      const prepared = getPreparedPluginSecretInput('openclaw-home-assistant-events', 'accessToken');
+      const config = parseRuntimeConfig(authored, prepared.value);
       scheduler = new ServiceScheduler();
       const configuredAgents = new Set(Object.keys(context.config.agents?.entries ?? {}));
       // The implicit default agent is main when no explicit list is configured.

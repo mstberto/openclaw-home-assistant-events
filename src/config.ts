@@ -13,6 +13,13 @@ export const configSchema = z.object({
     context.addIssue({ code: z.ZodIssueCode.custom, message: 'Use HTTPS or explicitly allow insecure HTTP for a trusted local network' });
 });
 export type Config = z.infer<typeof configSchema>;
+/** References stay in authored config; only the host's prepared snapshot supplies their value. */
+export function parseRuntimeConfig(input: unknown, preparedToken?: string): Config {
+  const authored = z.record(z.unknown()).parse(input);
+  const token = typeof authored.accessToken === 'string' ? authored.accessToken : preparedToken;
+  if (!token) throw new Error('Home Assistant access token is unavailable; configure a token string or a ready OpenClaw SecretRef');
+  return configSchema.parse({ ...authored, accessToken: token });
+}
 export function websocketUrl(base: string): string {
   const url = new URL(base.endsWith('/') ? base : `${base}/`);
   url.protocol = url.protocol === 'https:' ? 'wss:' : 'ws:';
