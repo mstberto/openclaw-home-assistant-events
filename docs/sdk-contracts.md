@@ -7,7 +7,7 @@ Verified on 2026-10-09 against the npm **openclaw@2026.9.9** package, its export
 - `openclaw/plugin-sdk/core`: `OpenClawPluginApi` (type only).
 - `openclaw/plugin-sdk/plugin-entry`: `definePluginEntry`, `buildJsonPluginConfigSchema`.
 
-No private imports, direct core database access, HTTP hook bridge, shell-triggered agent, or normal-chat fallback are used. Other imports are Node public APIs and ordinary npm libraries.
+No private imports, direct core database access, HTTP hook bridge, shell-triggered agent, or CLI dispatch bridge are used. Other imports are Node public APIs and ordinary npm libraries.
 
 ## Registration, activation, and ownership
 
@@ -19,11 +19,15 @@ The published `registerService` contract is v1: `id`, `reload.configPrefixes`, a
 
 ## Third-party dispatch
 
-The public `api.runtime.subagent.run` supports background service callers with plugin identity and a live Gateway binding. Parameters include a canonical `agent:<owner>:subagent:<event>` session key, `message`, `deliver: false`, and `idempotencyKey`. We forward lifecycle revocation through `assertCurrent`. No model override, completion delivery, or added tools are requested.
+The public `api.runtime.agent.runEmbeddedAgent` supports lifecycle service callers with plugin identity. We use the trusted tool context's session key, the public `agent.session.getSessionEntry` session UUID, captured sender/channel/account context, and current permission mode. No model override or extra tool grant is supplied. A session UUID changed by reset/deletion is not adopted automatically. Gateway writer admission also rejects a stale UUID or agent/session ownership mismatch.
 
-`waitForRun({ runId, timeoutMs })` reports `ok`, `error`, `timeout`, or `pending`. Observation timeout does not cancel or prove failure. Accepted sessions use the owning agent's configured model and normal background-session tool policy; policy still decides which actions it can perform. The Gateway owns acceptance and subsequent execution.
+`onUserMessagePersisted` identifies the current submitted event's transcript handoff; `onUserMessagePersistenceInvalidated` revokes that evidence. We record `delivered` only when persistence remains confirmed after the attempt settles, even if later model/tool execution failed. Model completion alone is not a receipt. This API does not automatically transport the final reply to an external channel or promise a live dashboard update. The event is available in canonical chat history; the agent's message tool can execute normal permitted actions.
 
-`api.runtime.hooks.dispatchHookAgentTurn` is unsuitable: published docs restrict it to bundled/trusted official installations and `externalContentSource: "email"`. We do not pretend HA is email or bypass that trust gate. `runEmbeddedAgent` is also public, but the isolated background API provides the desired accepted-run receipt and idempotency input without manually managing transcript identity.
+Actual disposable Gateway tests verified existing-session continuity, normal message execution against a synthetic channel, public `chat.history` visibility, shared-session sequencing, restart persistence, sender-specific group tool denials, reset rejection, cross-agent rejection, and cancellation before launch.
+
+Run IDs **do not deduplicate** embedded calls: replaying the same ID executed twice in the probe. The outbox durably reserves `running` before invoking the API. Startup converts interrupted/legacy accepted work to `uncertain`; it is never automatically replayed. Explicit manual retry acknowledges duplicate risk. This is a handoff lifecycle, not exactly-once external action execution.
+
+`api.runtime.subagent.run` was tested but abandoned because the published subagent layer hard-denies standard `message` and `sessions_send` tools. `completionDelivery: current-requester` only applies within an authenticated inbound `before_dispatch` hook, not a later HA event. Hook-agent dispatch and `runtime.gateway.request` are restricted to bundled/trusted official plugins; the latter rejection was confirmed against the actual Gateway. We do not impersonate trusted plugins or HA content as email.
 
 ## Persistence limitation and chosen implementation
 
@@ -34,6 +38,7 @@ The public service state directory plus a plugin-owned atomic file and `proper-l
 ## Sources
 
 - [OpenClaw building plugins](https://docs.openclaw.ai/plugins/building-plugins)
+- [OpenClaw agent runtime](https://docs.openclaw.ai/plugins/sdk-runtime/agent)
 - [OpenClaw background work](https://docs.openclaw.ai/plugins/sdk-runtime/background-work)
 - [OpenClaw state and system](https://docs.openclaw.ai/plugins/sdk-runtime/state-and-system)
 - [Manifest configuration and secrets](https://docs.openclaw.ai/plugins/manifest/config-and-secrets)
