@@ -1,7 +1,7 @@
 {
   "id": "openclaw-home-assistant-events",
   "name": "Home Assistant Events",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Persistent state, numeric threshold, and sustained-state watchers. Supplements official HA MCP; owning agents decide how to act.",
   "skills": [
     "./skills/home-assistant-events"
@@ -20,36 +20,33 @@
         "format": "uri"
       },
       "accessToken": {
-        "oneOf": [
-          {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "source",
+          "provider",
+          "id"
+        ],
+        "properties": {
+          "source": {
+            "type": "string",
+            "enum": [
+              "store",
+              "env",
+              "file",
+              "exec"
+            ]
+          },
+          "provider": {
+            "type": "string",
+            "minLength": 1,
+            "default": "default"
+          },
+          "id": {
             "type": "string",
             "minLength": 1
-          },
-          {
-            "type": "object",
-            "additionalProperties": false,
-            "required": [
-              "source",
-              "provider",
-              "id"
-            ],
-            "properties": {
-              "source": {
-                "enum": [
-                  "env",
-                  "file",
-                  "exec"
-                ]
-              },
-              "provider": {
-                "type": "string"
-              },
-              "id": {
-                "type": "string"
-              }
-            }
           }
-        ]
+        }
       },
       "allowedAgents": {
         "type": "array",
@@ -109,7 +106,7 @@
     "accessToken": {
       "label": "Home Assistant access token",
       "sensitive": true,
-      "help": "Prefer an OpenClaw SecretRef; the token never appears in tools, state, or plugin logs."
+      "help": "Select a secret source, provider, and secret name. Create a protected token in Settings \u2192 Secrets, or reference an existing environment variable."
     },
     "allowedAgents": {
       "label": "Allowed agent IDs",
@@ -118,6 +115,17 @@
     "allowInsecureHttp": {
       "label": "Allow HTTP on a trusted local network",
       "advanced": true
+    },
+    "accessToken.source": {
+      "label": "Secret source"
+    },
+    "accessToken.provider": {
+      "label": "Secret provider",
+      "placeholder": "default"
+    },
+    "accessToken.id": {
+      "label": "Secret name",
+      "placeholder": "HOME_ASSISTANT_TOKEN"
     }
   },
   "activation": {
