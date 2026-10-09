@@ -4,7 +4,7 @@ A small TypeScript plugin for persistent, agent-owned smart-home event subscript
 
 This complements the official Home Assistant MCP server. MCP handles discovery, current state, and control. This plugin handles future state transitions, numeric crossings, and sustained states. It never calls Home Assistant control services, selects a notification channel, or injects unmatched events into chat.
 
-**Status:** 0.1.1 candidate, MIT licensed. Repository remains private pending publication approval. Supported host: **OpenClaw 2026.9.9**, Node **24.16+ on the 24.x line or 26.1+**. SDK contracts are experimental; other host versions are not claimed compatible. See [verified contracts](docs/sdk-contracts.md) and [release readiness](docs/release-readiness.md).
+**Status:** 0.1.2 candidate, MIT licensed. Repository remains private pending publication approval. Supported host: **OpenClaw 2026.9.9**, Node **24.16+ on the 24.x line or 26.1+**. SDK contracts are experimental; other host versions are not claimed compatible. See [verified contracts](docs/sdk-contracts.md) and [release readiness](docs/release-readiness.md).
 
 ## Install in a test Gateway
 
@@ -16,7 +16,7 @@ npm run check
 npm pack
 ```
 
-Install the generated `openclaw-home-assistant-events-0.1.1.tgz` using OpenClaw's supported plugin installer, then enable `openclaw-home-assistant-events`. Package installation may require a Gateway restart. Do this in a separate test Gateway before enabling it in an existing installation.
+Install the generated `openclaw-home-assistant-events-0.1.2.tgz` using OpenClaw's supported plugin installer, then enable `openclaw-home-assistant-events`. Package installation may require a Gateway restart. Do this in a separate test Gateway before enabling it in an existing installation.
 
 The package ships built JavaScript, its manifest, documentation, and a short optional discoverability skill. Nothing requires the official HA MCP integration to be installed, although it is the recommended companion for entity discovery.
 

@@ -1,7 +1,7 @@
 {
   "id": "openclaw-home-assistant-events",
   "name": "Home Assistant Events",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "Persistent state, numeric threshold, and sustained-state watchers. Supplements official HA MCP; owning agents decide how to act.",
   "skills": [
     "./skills/home-assistant-events"
@@ -39,8 +39,7 @@
           },
           "provider": {
             "type": "string",
-            "minLength": 1,
-            "default": "default"
+            "minLength": 1
           },
           "id": {
             "type": "string",

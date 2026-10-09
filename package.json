@@ -1,6 +1,6 @@
 {
   "name": "openclaw-home-assistant-events",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "Persistent agent-owned Home Assistant event subscriptions for OpenClaw",
   "type": "module",
   "license": "MIT",
