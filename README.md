@@ -4,7 +4,7 @@ A small TypeScript plugin for persistent, agent-owned smart-home event subscript
 
 This complements the official Home Assistant MCP server. MCP handles discovery, current state, and control. This plugin handles future state transitions, numeric crossings, and sustained states. It never calls Home Assistant control services, selects a notification channel, or injects unmatched events into chat.
 
-**Status:** 0.1.2 candidate, MIT licensed. Repository remains private pending publication approval. Supported host: **OpenClaw 2026.9.9**, Node **24.16+ on the 24.x line or 26.1+**. SDK contracts are experimental; other host versions are not claimed compatible. See [verified contracts](docs/sdk-contracts.md) and [release readiness](docs/release-readiness.md).
+**Status:** 0.1.3 candidate, MIT licensed. Repository remains private pending publication approval. Supported host: **OpenClaw 2026.9.9**, Node **24.16+ on the 24.x line or 26.1+**. SDK contracts are experimental; other host versions are not claimed compatible. See [verified contracts](docs/sdk-contracts.md) and [release readiness](docs/release-readiness.md).
 
 ## Install in a test Gateway
 
@@ -16,7 +16,7 @@ npm run check
 npm pack
 ```
 
-Install the generated `openclaw-home-assistant-events-0.1.2.tgz` using OpenClaw's supported plugin installer, then enable `openclaw-home-assistant-events`. Package installation may require a Gateway restart. Do this in a separate test Gateway before enabling it in an existing installation.
+Install the generated `openclaw-home-assistant-events-0.1.3.tgz` using OpenClaw's supported plugin installer, then enable `openclaw-home-assistant-events`. Package installation may require a Gateway restart. Do this in a separate test Gateway before enabling it in an existing installation.
 
 The package ships built JavaScript, its manifest, documentation, and a short optional discoverability skill. Nothing requires the official HA MCP integration to be installed, although it is the recommended companion for entity discovery.
 
@@ -52,7 +52,7 @@ Example plugin configuration (inside the existing `plugins.entries` map):
 }
 ```
 
-Supply `HOME_ASSISTANT_TOKEN` to the Gateway through its existing secret/environment setup. OpenClaw resolves declared secret inputs; the plugin reads the prepared credential through the public SDK. File and exec SecretRefs are also accepted by the manifest. Unresolved credentials fail startup. The native form uses separate source, provider, and secret-name fields. For the simplest setup, save the token in Settings → Secrets, select `store`, enter provider `default`, and enter the saved secret name. Existing plaintext configurations must be migrated to a reference before applying this version.
+Supply `HOME_ASSISTANT_TOKEN` to the Gateway through its existing secret/environment setup. OpenClaw resolves declared secret inputs; the plugin reads the prepared credential from the candidate plugin API runtime configuration. File and exec SecretRefs are also accepted by the manifest. Unresolved credentials fail startup. The native form uses separate source, provider, and secret-name fields. For the simplest setup, save the token in Settings → Secrets, select `store`, enter provider `default`, and enter the saved secret name. Existing plaintext configurations must be migrated to a reference before applying this version.
 
 Credentials never enter subscriptions, delivery payloads, or plugin logs. HA long-lived tokens may permit more than listening: this plugin is read-only in behavior, not a guarantee that the token itself has read-only privileges. Use a suitable HA account and protect the token and Gateway host.
 
