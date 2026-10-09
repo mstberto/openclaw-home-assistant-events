@@ -2,6 +2,7 @@ import type { OpenClawPluginApi } from 'openclaw/plugin-sdk/core';
 import { readFileSync } from 'node:fs';
 import { definePluginEntry, buildJsonPluginConfigSchema } from 'openclaw/plugin-sdk/plugin-entry';
 import { z } from 'zod';
+import { sourceSessionSchema, type SourceSession } from './model.js';
 import { configSchema } from './config.js';
 import { createDispatcher } from './dispatch.js';
 import { Engine } from './engine.js';
@@ -35,14 +36,22 @@ function register(api: OpenClawPluginApi): void {
   };
   const tools = [
     { name: 'ha_events_subscribe', description: 'Persist a smart-home event watcher. Wake only this agent when a state, numeric crossing, or sustained state matches. Supplements official HA MCP.', parameters: subscriptionParameters,
-      run: (owner: string, input: unknown, guard: () => void) => requireEngine().subscribe(owner, input, guard) },
+      run: (owner: string, input: unknown, guard: () => void, source?: SourceSession) => requireEngine().subscribe(owner, input, guard, source) },
     { name: 'ha_events_list', description: 'List this agent\'s persistent Home Assistant event subscriptions.', parameters: emptyParameters,
       run: (owner: string) => requireEngine().list(owner) },
     { name: 'ha_events_remove', description: 'Remove this agent\'s watcher and cancel its unsubmitted events. Work already submitted to the host may complete.',
       parameters: { type: 'object', additionalProperties: false, required: ['subscriptionId'], properties: { subscriptionId: { type: 'string' } } },
       run: (owner: string, input: unknown, guard: () => void) => requireEngine().remove(owner, z.object({ subscriptionId: z.string().uuid() }).strict().parse(input).subscriptionId, guard) },
-    { name: 'ha_events_status', description: 'Check listener health and this agent\'s pending, accepted, and failed event deliveries.', parameters: emptyParameters,
+    { name: 'ha_events_status', description: 'Check listener health and this agent\'s pending, running, delivered, uncertain, and failed events; inspect uncertain events before manual resolution.', parameters: emptyParameters,
       run: async (owner: string) => ({ connection: connection?.status ?? 'stopped', ...(await requireEngine().status(owner) as Record<string, unknown>) }) },
+    { name: 'ha_events_resolve', description: 'After explicit user review, resolve an uncertain or failed event. Mark delivered only after verifying the conversation; dismiss to stop; retry only with explicit duplicate-risk acknowledgement. Never automatically retry uncertain events.',
+      parameters: { type: 'object', additionalProperties: false, required: ['deliveryId', 'resolution'], properties: {
+        deliveryId: { type: 'string' }, resolution: { enum: ['delivered', 'dismissed', 'retry'] }, acknowledgeDuplicateRisk: { type: 'boolean', default: false },
+      } },
+      run: (owner: string, input: unknown, guard: () => void) => {
+        const args = z.object({ deliveryId: z.string(), resolution: z.enum(['delivered', 'dismissed', 'retry']), acknowledgeDuplicateRisk: z.boolean().default(false) }).strict().parse(input);
+        return requireEngine().resolveDelivery(owner, args.deliveryId, args.resolution, args.acknowledgeDuplicateRisk, guard);
+      } },
   ];
   for (const tool of tools) api.registerTool(context => {
     if (!context.agentId) return null;
@@ -53,7 +62,22 @@ function register(api: OpenClawPluginApi): void {
       async execute(_callId: string, input: unknown) {
         const guard = (): void => { context.assertInvocationCurrent?.(); context.assertInputCommitAllowed?.(); };
         guard();
-        const result = await tool.run(owner, input, guard);
+        let source: SourceSession | undefined;
+        if (tool.name === 'ha_events_subscribe') {
+          if (!context.sessionKey?.startsWith(`agent:${owner}:`) || context.sessionKey.includes(':subagent:')) throw new Error('Create subscriptions in a normal owning-agent conversation');
+          const entry = api.runtime.agent.session.getSessionEntry({ agentId: owner, sessionKey: context.sessionKey });
+          if (!entry || (context.sessionId && entry.sessionId !== context.sessionId)) throw new Error('Originating conversation is unavailable or changed');
+          source = sourceSessionSchema.parse({ sessionKey: context.sessionKey, sessionId: entry.sessionId,
+            senderIsOwner: context.senderIsOwner ?? false,
+            ...(context.messageChannel ? { channel: context.messageChannel } : {}),
+            ...(context.agentAccountId ? { accountId: context.agentAccountId } : {}),
+            ...(context.requesterSenderId ? { senderId: context.requesterSenderId } : {}),
+            ...(context.nativeChannelId ? { nativeChannelId: context.nativeChannelId } : {}),
+            ...(context.deliveryContext?.to ? { target: context.deliveryContext.to } : {}),
+            ...(context.deliveryContext?.threadId !== undefined ? { threadId: context.deliveryContext.threadId } : {}),
+          });
+        }
+        const result = await tool.run(owner, input, guard, source);
         return { content: [{ type: 'text' as const, text: JSON.stringify(result) }], details: result };
       },
     };
@@ -73,6 +97,7 @@ function register(api: OpenClawPluginApi): void {
       engine = new Engine(repository, config.allowedAgents, scheduler.now);
       try { await engine.load(); } catch (error) { await fileStore.close(); fileStore = undefined; engine = undefined; throw error; }
       const outbox = new Outbox(repository, createDispatcher(api, scheduler.signal), config.allowedAgents, scheduler.now);
+      try { await outbox.recover(); } catch (error) { await fileStore.close(); fileStore = undefined; engine = undefined; throw error; }
       const report = (message: string): void => { api.logger.error(message); context.serviceHealth?.reportFailure(new Error(message)); };
       connection = new HaConnection(config, engine, scheduler, report, undefined, () => context.serviceHealth?.clearFailure());
       const activeEngine = engine;

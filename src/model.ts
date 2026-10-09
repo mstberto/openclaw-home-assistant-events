@@ -21,8 +21,18 @@ export const subscriptionInputSchema = z.object({
     ctx.addIssue({ code: z.ZodIssueCode.custom, message: 'above must be less than below' });
 });
 export type SubscriptionInput = z.infer<typeof subscriptionInputSchema>;
+// Captured from trusted tool context, never from subscription arguments.
+export const sourceSessionSchema = z.object({
+  sessionKey: z.string().min(1).max(512), sessionId: z.string().uuid(),
+  channel: z.string().max(128).optional(), accountId: z.string().max(128).optional(),
+  senderId: z.string().max(512).optional(), senderIsOwner: z.boolean(),
+  nativeChannelId: z.string().max(512).optional(), target: z.string().max(512).optional(),
+  threadId: z.union([z.string().max(512), z.number()]).optional(),
+}).strict();
+export type SourceSession = z.infer<typeof sourceSessionSchema>;
 export const subscriptionSchema = z.object({
   id: z.string().uuid(), agentId: agentIdSchema, input: subscriptionInputSchema,
+  source: sourceSessionSchema.optional(),
   createdAt: z.number(), consumed: z.boolean().default(false),
   // Armed transitions survive restart but must be confirmed by a fresh HA snapshot.
   armed: z.object({ since: z.number(), transitionId: z.string() }).optional(),
@@ -44,7 +54,10 @@ export const deliverySchema = z.object({
   entityId: entityIdSchema, instruction: z.string(), previousState: z.string().nullable(),
   currentState: z.string(), occurredAt: z.number(), oneShot: z.boolean(),
   attempts: z.number().int().nonnegative(), nextAttemptAt: z.number(),
-  status: z.enum(['pending', 'accepted', 'failed']), runId: z.string().optional(),
+  source: sourceSessionSchema.optional(),
+  status: z.enum(['pending', 'accepted', 'running', 'delivered', 'uncertain', 'failed', 'dismissed']),
+  runId: z.string().optional(), startedAt: z.number().optional(), deliveredAt: z.number().optional(),
+  reason: z.string().max(512).optional(), reviews: z.number().int().nonnegative().optional(),
 }).strict();
 export type Delivery = z.infer<typeof deliverySchema>;
 export const documentSchema = z.object({
@@ -53,3 +66,10 @@ export const documentSchema = z.object({
 }).strict();
 export type StateDocument = z.infer<typeof documentSchema>;
 export const emptyDocument = (): StateDocument => ({ version: 1, subscriptions: [], deliveries: [], seen: [] });
+
+/** Keep audit history bounded while retaining every unresolved handoff. */
+export function pruneDeliveryHistory(document: StateDocument): void {
+  const completed = document.deliveries.filter(d => d.status === 'delivered' || d.status === 'dismissed');
+  const prune = new Set(completed.slice(0, Math.max(0, completed.length - 1000)).map(d => d.id));
+  document.deliveries = document.deliveries.filter(d => !prune.has(d.id));
+}
