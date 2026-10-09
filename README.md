@@ -2,7 +2,7 @@
 
 A small TypeScript plugin for persistent, agent-owned smart-home event subscriptions. Home Assistant's WebSocket listener runs continuously; an agent runs only when its subscription matches.
 
-This complements the official Home Assistant MCP server. MCP handles discovery, current state, and control. This plugin handles future state transitions, numeric crossings, and sustained states. It never calls Home Assistant control services, selects a notification channel, or injects routine events into normal chat.
+This complements the official Home Assistant MCP server. MCP handles discovery, current state, and control. This plugin handles future state transitions, numeric crossings, and sustained states. It never calls Home Assistant control services, selects a notification channel, or injects unmatched events into chat.
 
 **Status:** 0.1.0 candidate, MIT licensed. Repository remains private pending publication approval. Supported host: **OpenClaw 2026.9.9**, Node **24.16+ on the 24.x line or 26.1+**. SDK contracts are experimental; other host versions are not claimed compatible. See [verified contracts](docs/sdk-contracts.md) and [release readiness](docs/release-readiness.md).
 
@@ -65,7 +65,8 @@ Only explicitly allowed agents receive the tools. Ownership comes from OpenClaw'
 | `ha_events_subscribe` | Persist a one-shot or recurring watcher |
 | `ha_events_list` | List the caller's watchers, including consumed one-shots |
 | `ha_events_remove` | Remove a caller-owned watcher and cancel unsubmitted events |
-| `ha_events_status` | Check listener synchronization and caller-owned delivery status |
+| `ha_events_status` | Inspect listener health and pending/running/delivered/uncertain/failed records |
+| `ha_events_resolve` | Resolve a reviewed uncertain/failed event as delivered, dismissed, or explicitly retried |
 
 Example subscription:
 
@@ -88,9 +89,11 @@ Use exact entity IDs, states, and units from HA MCP. A subscribe result contains
 
 `oneShot` defaults to true. Claiming a match persists consumption and its delivery together. It does not discard a failed dispatch: the outbox retains it. Separate recurring watchers are explicit; subscribing twice intentionally creates two watchers.
 
-## Isolated event execution
+## Return to the originating conversation
 
-A matched event creates a dedicated background session for its owning agent via the public `api.runtime.subagent.run` API, with `deliver: false` and a stable idempotency key. No normal conversation is selected and no automatic completion route is supplied. The agent uses its configured model and tools, subject to host policy; the plugin supplies no model override or broader tool grant.
+A subscription captures its creating agent and exact session identity from OpenClaw's trusted tool context. Subscription arguments cannot choose a different session, owner, sender, or notification destination. A match continues that conversation through public `api.runtime.agent.runEmbeddedAgent`. The original history is available; save a self-contained instruction too, since conversations may later be compacted.
+
+The plugin passes the captured sender, channel/account, and source route context and the current session permission mode. Normal host tool policy still applies; it does not force-enable message tools or request privileged grants. Reset/deletion fails closed rather than silently sending into a new conversation. Recreate the watcher after a reset. Subagent-created subscriptions are rejected. Legacy subscriptions without a source session need recreation; legacy accepted deliveries become uncertain for review.
 
 Payload shape:
 
@@ -112,7 +115,28 @@ Payload shape:
 }
 ```
 
-The instruction and observed state are distinct. State strings are untrusted external data. The owning agent decides what to do and, if needed, how to reach its user using existing permissions and tools. Because the run is isolated, the instruction should contain enough context to perform the task; the plugin does not copy normal chat history or infer an outbound destination. Agent policy may restrict communication tools in a background session.
+The instruction and observed state are distinct. State strings are untrusted external data. The owning agent decides what to do and how to reach its user. The plugin does not send user notifications. Captured source routing describes the original conversation, not a new user-notification destination.
+
+### Handoff and manual review
+
+| Status | Meaning | Recovery |
+| --- | --- | --- |
+| `pending` | Queued; runtime has not been invoked | Safe preflight retries with backoff |
+| `running` | Attempt recorded durably before invocation | On restart becomes uncertain |
+| `delivered` | Runtime confirmed this event persisted in the session transcript | Never automatically repeated |
+| `uncertain` | Interrupted execution or missing/invalidated transcript evidence | Explicit manual review |
+| `failed` | Definite preflight rejection or exhausted preflight retries | Inspect and resolve |
+| `dismissed` | Reviewer chose to stop pursuing this event | Never repeated |
+
+Delivery is **transcript persistence**, not successful model execution, notification delivery, or a live UI push. The public persistence callback is tracked with its invalidation callback; the plugin records the receipt when the runtime attempt settles. A model failure after confirmed persistence does not cause another event dispatch. A crash before the receipt is saved leaves uncertain work even when the transcript already contains the event. OpenClaw may independently resume the admitted agent turn after restart; uncertain status prevents the plugin from submitting another turn, not the host from continuing its own work.
+
+Use `ha_events_status` to inspect the event ID, saved instruction, originating session, attempt ID, timestamps, and review reason. Check that conversation's history before deciding what happened. Resolve only after explicit user review:
+
+```json
+{ "deliveryId": "<event ID>", "resolution": "delivered" }
+```
+
+Other resolutions are `dismissed` and `retry`. Retry also requires `"acknowledgeDuplicateRisk": true`; it creates a new attempt for the same event and may repeat an action already performed. Only the owning allowed agent can review its records. Running work cannot be resolved while executing. Review does not retarget reset/deleted conversations; recreate their subscriptions instead.
 
 ## Reliability and operational limits
 
@@ -126,16 +150,16 @@ Subscriptions, logical duration state, match deduplication, and the outbox persi
 
 The file is private (0600 on POSIX) inside a private directory (0700), with a maintained single-writer lock. Each change writes and syncs a temporary file, atomically renames it, then syncs the directory. State is versioned and validated; corruption fails startup rather than silently deleting watchers. Stop joins listener work, timers, queue processing, and persistence before releasing ownership. After an abrupt crash a stale lock may delay startup by about ten seconds. Back up this directory separately; do not assume OpenClaw's private plugin-state database contains it. The file contains household state and instructions, so protect backups too.
 
-Bounds: 1,000 subscriptions, 5,000 outstanding/failed delivery records, 10,000 recent dedup IDs, and 16 MiB persisted JSON. The HA snapshot payload is capped at 8 MiB; synchronization buffers at most 10,000 events. These conservative v0.1 limits are fixed. Completed deliveries leave the outbox; consumed watchers and failed deliveries remain until their owning agent removes the watcher. Queue saturation fails closed and is reported; transitions while saturated may be missed.
+Bounds: 1,000 subscriptions, 5,000 outstanding/failed delivery records, 10,000 recent dedup IDs, and 16 MiB persisted JSON. The HA snapshot payload is capped at 8 MiB; synchronization buffers at most 10,000 events. These conservative v0.1 limits are fixed. Up to 1,000 delivered/dismissed audit records are retained. Unresolved records are never silently pruned. Removing a watcher preserves running and uncertain attempts for review. Queue saturation fails closed and is reported; transitions while saturated may be missed.
 
-Admission retries use stable IDs, exponential backoff, and twelve attempts, then retain a failed record. Accepted run IDs are saved and polled. Observation timeouts keep the accepted record; a known terminal run failure is retained without automatically repeating actions. Removed agents' watchers stay stored and suspended; configuration reload stops future admissions under the old allowlist, while host-accepted work retains its own lifecycle.
+Preflight retries use exponential backoff and twelve attempts. The queue saves running intent before invoking the runtime. Only definite pre-invocation failures are automatically retried; all inconclusive runtime attempts require review. Configuration reload aborts service-owned execution and future admissions under the old allowlist.
 
 **Guarantees have boundaries:**
 
 - HA's live stream has no durable replay. Events during disconnects or processing failures may be missed. Snapshots reconcile duration conditions but do not invent missed state/numeric transitions.
-- Dispatch is at-least-once admission with bounded retries and dedup, not exactly-once user notification. A crash between host acceptance and receipt persistence can cause replay after the host's dedup retention expires.
-- Host acceptance or agent completion does not prove a notification was delivered. Accepted runs with uncertain terminal state remain visible; the plugin does not blindly resubmit them.
-- The host retains isolated sessions according to its session lifecycle. This plugin does not delete agent execution history automatically.
+- Embedded run IDs are not host idempotency keys. Automatic replay of interrupted execution is deliberately prohibited. Pending events survive restart; running events become uncertain.
+- Transcript handoff does not prove the agent executed its task or sent a notification. Real channel/UI delivery and host permissions remain the agent/host's responsibility. The smoke test exercises a real message tool against a synthetic transport and reads history through the Gateway's public `chat.history` API; it is not a test of Alice's live channels or automatic UI push updates.
+- Normal chat turns and event turns share session sequencing. Reset/deletion can invalidate a queued event. Events may wait behind a long foreground turn.
 - Persistence assumes a local POSIX filesystem with atomic rename, directory fsync, and reliable lock timestamps. Network filesystems and Windows durability have not been validated.
 
 ## Development

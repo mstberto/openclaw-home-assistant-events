@@ -128,7 +128,8 @@
       "ha_events_subscribe",
       "ha_events_list",
       "ha_events_remove",
-      "ha_events_status"
+      "ha_events_status",
+      "ha_events_resolve"
     ]
   },
   "categories": [
