@@ -1,0 +1,137 @@
+{
+  "id": "openclaw-home-assistant-events",
+  "name": "Home Assistant Events",
+  "version": "0.1.0",
+  "description": "Persistent state, numeric threshold, and sustained-state watchers. Supplements official HA MCP; owning agents decide how to act.",
+  "skills": [
+    "./skills/home-assistant-events"
+  ],
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "required": [
+      "url",
+      "accessToken",
+      "allowedAgents"
+    ],
+    "properties": {
+      "url": {
+        "type": "string",
+        "format": "uri"
+      },
+      "accessToken": {
+        "oneOf": [
+          {
+            "type": "string",
+            "minLength": 1
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "source",
+              "provider",
+              "id"
+            ],
+            "properties": {
+              "source": {
+                "enum": [
+                  "env",
+                  "file",
+                  "exec"
+                ]
+              },
+              "provider": {
+                "type": "string"
+              },
+              "id": {
+                "type": "string"
+              }
+            }
+          }
+        ]
+      },
+      "allowedAgents": {
+        "type": "array",
+        "minItems": 1,
+        "uniqueItems": true,
+        "items": {
+          "type": "string",
+          "pattern": "^[a-z0-9][a-z0-9_-]{0,63}$"
+        }
+      },
+      "allowInsecureHttp": {
+        "type": "boolean",
+        "default": false
+      }
+    }
+  },
+  "configContracts": {
+    "secretInputs": {
+      "paths": [
+        {
+          "path": "accessToken",
+          "expected": "string",
+          "ownerKind": "capability"
+        }
+      ]
+    },
+    "dangerousFlags": [
+      {
+        "path": "allowInsecureHttp",
+        "equals": true
+      }
+    ]
+  },
+  "configGroups": [
+    {
+      "id": "connection",
+      "title": "Home Assistant",
+      "properties": [
+        "url",
+        "accessToken",
+        "allowInsecureHttp"
+      ]
+    },
+    {
+      "id": "agents",
+      "title": "Agent access",
+      "properties": [
+        "allowedAgents"
+      ]
+    }
+  ],
+  "uiHints": {
+    "url": {
+      "label": "Home Assistant URL",
+      "placeholder": "https://homeassistant.example.com"
+    },
+    "accessToken": {
+      "label": "Home Assistant access token",
+      "sensitive": true,
+      "help": "Prefer an OpenClaw SecretRef; the token never appears in tools, state, or plugin logs."
+    },
+    "allowedAgents": {
+      "label": "Allowed agent IDs",
+      "help": "Only configured agents in this list can own watchers."
+    },
+    "allowInsecureHttp": {
+      "label": "Allow HTTP on a trusted local network",
+      "advanced": true
+    }
+  },
+  "activation": {
+    "onStartup": true
+  },
+  "contracts": {
+    "tools": [
+      "ha_events_subscribe",
+      "ha_events_list",
+      "ha_events_remove",
+      "ha_events_status"
+    ]
+  },
+  "categories": [
+    "scheduling"
+  ]
+}
