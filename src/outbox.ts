@@ -6,10 +6,10 @@ export class DispatchPreflightError extends Error {
   constructor(message: string, readonly permanent = false) { super(message); }
 }
 export interface PreparedDispatch {
-  execute(runId: string): Promise<{ persisted: boolean }>;
+  execute(runId: string): Promise<{ persisted: boolean; failureReason?: string }>;
 }
 export interface Dispatcher {
-  prepare(delivery: Delivery): PreparedDispatch;
+  prepare(delivery: Delivery, signal?: AbortSignal): PreparedDispatch;
 }
 /** Persist intent before effects. Never automatically replay an inconclusive attempt. */
 export class Outbox {
@@ -26,15 +26,20 @@ export class Outbox {
       }
     });
   }
-  async drain(): Promise<void> {
+  async hasDueWork(): Promise<boolean> {
+    if (this.draining) return false;
+    return (await this.repository.read()).deliveries.some(d => d.status === 'pending' && d.nextAttemptAt <= this.now() && this.allowedAgents.includes(d.agentId));
+  }
+  async drain(signal?: AbortSignal, limit = 20): Promise<void> {
     if (this.draining) return;
     this.draining = true;
     try {
       const document = await this.repository.read();
-      for (const delivery of document.deliveries.filter(d => d.status === 'pending' && d.nextAttemptAt <= this.now()).slice(0, 20)) {
+      for (const delivery of document.deliveries.filter(d => d.status === 'pending' && d.nextAttemptAt <= this.now()).slice(0, limit)) {
+        if (signal?.aborted) break;
         if (!this.allowedAgents.includes(delivery.agentId)) continue;
         let prepared: PreparedDispatch;
-        try { prepared = this.dispatcher.prepare(delivery); }
+        try { prepared = this.dispatcher.prepare(delivery, signal); }
         catch (error) {
           // No runtime invocation occurred: only these failures are safe to retry automatically.
           await this.repository.transact(document => {
@@ -58,7 +63,11 @@ export class Outbox {
         if (!reserved) continue;
         let persisted = false;
         let reason = 'Runtime did not confirm transcript persistence; manual review required';
-        try { persisted = (await prepared.execute(runId)).persisted; }
+        try {
+          const result = await prepared.execute(runId);
+          persisted = result.persisted;
+          if (!persisted && result.failureReason) reason = result.failureReason;
+        }
         catch (error) {
           // A final pre-invocation guard may reject after reservation. It is still safe to retry.
           if (error instanceof DispatchPreflightError) {

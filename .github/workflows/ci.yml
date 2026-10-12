@@ -21,5 +21,6 @@ jobs:
       - run: npm run check
       - run: npm run test:smoke
       - run: npm run test:activation
+      - run: npm run test:hot-dispatch
       - run: npm audit --omit=dev --audit-level=high
       - run: npm pack --dry-run

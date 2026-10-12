@@ -11,6 +11,8 @@ import { Repository } from './repository.js';
 import { FileStore } from './file-store.js';
 import { ServiceScheduler } from './scheduler.js';
 import { HaConnection } from './transport.js';
+import { LocalWake, LOCAL_WAKE_PATH } from './local-wake.js';
+import { hideOwnedEventInput } from './visibility.js';
 
 const emptyParameters = { type: 'object', properties: {}, additionalProperties: false };
 const subscriptionParameters = {
@@ -26,6 +28,12 @@ const subscriptionParameters = {
   },
 };
 function register(api: OpenClawPluginApi): void {
+  api.on('before_message_write', (event, context) => {
+    const message = hideOwnedEventInput(event.message, context.sessionKey, api.id);
+    return message ? { message } : undefined;
+  });
+  const wake = new LocalWake();
+  api.registerHttpRoute({ path: LOCAL_WAKE_PATH, auth: 'plugin', match: 'exact', handler: wake.handle });
   let engine: Engine | undefined;
   let connection: HaConnection | undefined;
   let scheduler: ServiceScheduler | undefined;
@@ -90,6 +98,11 @@ function register(api: OpenClawPluginApi): void {
       // generation. The candidate API already carries its validated runtime config.
       const candidateToken = api.pluginConfig?.accessToken;
       const config = parseRuntimeConfig(authored, typeof candidateToken === 'string' ? candidateToken : undefined);
+      if (context.config.gateway?.tls?.enabled) throw new Error('Internal event wake requires an HTTP Gateway listener on loopback; Gateway TLS is not supported yet');
+      const gateway = context.config.gateway;
+      if (gateway?.bind === 'tailnet' || (gateway?.bind === 'custom' && !['127.0.0.1', '0.0.0.0'].includes(gateway.customBindHost ?? ''))) {
+        throw new Error('Internal event wake requires the Gateway HTTP listener to accept connections on 127.0.0.1');
+      }
       scheduler = new ServiceScheduler();
       const configuredAgents = new Set(Object.keys(context.config.agents?.entries ?? {}));
       // The implicit default agent is main when no explicit list is configured.
@@ -101,6 +114,9 @@ function register(api: OpenClawPluginApi): void {
       try { await engine.load(); } catch (error) { await fileStore.close(); fileStore = undefined; engine = undefined; throw error; }
       const outbox = new Outbox(repository, createDispatcher(api, scheduler.signal), config.allowedAgents, scheduler.now);
       try { await outbox.recover(); } catch (error) { await fileStore.close(); fileStore = undefined; engine = undefined; throw error; }
+      wake.start({ url: new URL(`http://127.0.0.1:${context.config.gateway?.port ?? 18789}${LOCAL_WAKE_PATH}`),
+        signal: scheduler.signal, timeoutMs: api.runtime.agent.resolveAgentTimeoutMs({ cfg: api.config }) + 30000,
+        run: signal => outbox.drain(signal, 1) });
       const report = (message: string): void => { api.logger.error(message); context.serviceHealth?.reportFailure(new Error(message)); };
       connection = new HaConnection(config, engine, scheduler, report, undefined, () => context.serviceHealth?.clearFailure());
       const activeEngine = engine;
@@ -108,11 +124,11 @@ function register(api: OpenClawPluginApi): void {
         try { await activeEngine.tick(); } catch { report('HA duration processing failed'); }
       } });
       scheduler.schedule({ id: 'ha-outbox', delayMs: 1000, everyMs: 1000, run: async () => {
-        try { await outbox.drain(); } catch { report('HA delivery processing failed'); }
+        try { if (await outbox.hasDueWork()) await wake.wake(); } catch { report('HA internal wake transport failed'); }
       } });
       connection.start();
     },
-    async stop() { scheduler?.beginClose(); await connection?.stop(); await scheduler?.stop(); await engine?.repository.settled(); await fileStore?.close(); fileStore = undefined; engine = undefined; connection = undefined; },
+    async stop() { scheduler?.beginClose(); await connection?.stop(); await wake.stop(); await scheduler?.stop(); await engine?.repository.settled(); await fileStore?.close(); fileStore = undefined; engine = undefined; connection = undefined; },
   });
 }
 const manifest = JSON.parse(readFileSync(new URL('../openclaw.plugin.json', import.meta.url), 'utf8')) as { configSchema: Record<string, unknown> };

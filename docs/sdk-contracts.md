@@ -19,11 +19,15 @@ The published `registerService` contract is v1: `id`, `reload.configPrefixes`, a
 
 ## Third-party dispatch
 
-The public `api.runtime.agent.runEmbeddedAgent` supports lifecycle service callers with plugin identity. We use the trusted tool context's session key, the public `agent.session.getSessionEntry` session UUID, captured sender/channel/account context, and current permission mode. No model override or extra tool grant is supplied. A session UUID changed by reset/deletion is not adopted automatically. Gateway writer admission also rejects a stale UUID or agent/session ownership mismatch.
+The public `api.runtime.agent.runEmbeddedAgent` supports lifecycle service callers with plugin identity. We use the trusted tool context's session key, the public `agent.session.getSessionEntry` session UUID, captured sender/channel/account context, and current permission mode. We pass the host configuration and preserve the current session's model provider, model, harness ID, and model-selection lock. Subscription input cannot override these settings or grant tools. A session UUID changed by reset/deletion is not adopted automatically. Gateway writer admission also rejects a stale UUID or agent/session ownership mismatch.
 
 `onUserMessagePersisted` identifies the current submitted event's transcript handoff; `onUserMessagePersistenceInvalidated` revokes that evidence. We record `delivered` only when persistence remains confirmed after the attempt settles, even if later model/tool execution failed. Model completion alone is not a receipt. This API does not automatically transport the final reply to an external channel or promise a live dashboard update. The event is available in canonical chat history; the agent's message tool can execute normal permitted actions.
 
 Actual disposable Gateway tests verified existing-session continuity, normal message execution against a synthetic channel, public `chat.history` visibility, shared-session sequencing, restart persistence, sender-specific group tool denials, reset rejection, cross-agent rejection, and cancellation before launch.
+
+Those end-to-end tests use the default OpenClaw harness. A production Codex session exposed missing configuration/runtime parameters in version 0.1.3: HA matched, but the event had no transcript receipt and remained uncertain. The correction has a parameter-preservation regression test; actual Codex handoff and message execution still require separate end-to-end validation. Do not infer native harness compatibility from the default-harness smoke test.
+
+The subsequent diagnostic identified `GatewayDrainingError` at command enqueue after live activation. The plugin now uses public `registerHttpRoute` with plugin-owned authentication to obtain a fresh, loopback HTTP request admission before draining one saved event. The handler stays awaited through dispatch; a response must not be sent before execution settles. This uses no private root-admission import and no Gateway administrator credential. The hot-dispatch integration proves existing-session persistence and message execution on the unchanged 2026.9.9 host, followed by real crash recovery without replay. Unit tests cover one-use credentials, concurrent calls, non-loopback/body/method refusal, deadline cancellation, and shutdown joining handler cleanup. The user subsequently confirmed successful native Codex dispatch in the live pilot.
 
 Run IDs **do not deduplicate** embedded calls: replaying the same ID executed twice in the probe. The outbox durably reserves `running` before invoking the API. Startup converts interrupted/legacy accepted work to `uncertain`; it is never automatically replayed. Explicit manual retry acknowledges duplicate risk. This is a handoff lifecycle, not exactly-once external action execution.
 
@@ -47,3 +51,7 @@ The public service state directory plus a plugin-owned atomic file and `proper-l
 - [Home Assistant WebSocket API](https://developers.home-assistant.io/docs/api/websocket/)
 
 Public SDK APIs are experimental. Version pinning is deliberate. Do not relax it solely because a newer host keeps the same method names.
+
+## Event input visibility
+
+Candidate 0.1.4-rc.4 supplies internal-system provenance using the plugin's own ID, reserved run ID, and exact source session. The public synchronous `before_message_write` hook changes only `display` on that plugin-owned user input. It does not block persistence, alter content/roles, impersonate cron/subagents, or hide replies. The disposable Gateway confirms full event delivery, hidden input in public history, visible original conversation/reply, receipt validity, and crash/no-replay recovery. The user confirmed hidden event input and a visible alert in the live Codex/macOS pilot with 0.1.4-rc.4.

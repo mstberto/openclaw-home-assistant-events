@@ -9,7 +9,8 @@ import { WebSocketServer } from 'ws';
 import assert from 'node:assert/strict';
 
 const root = resolve(import.meta.dirname, '..');
-const activationProbe = process.argv.includes('--activation');
+const hotDispatchProbe = process.argv.includes('--hot-dispatch');
+const activationProbe = process.argv.includes('--activation') || hotDispatchProbe;
 const temporary = await mkdtemp(join(tmpdir(), 'ha-events-gateway-smoke-'));
 const captures = []; let stall = false;
 const mock = createServer((request, response) => {
@@ -96,7 +97,11 @@ try {
     await cli(['plugins','enable','openclaw-home-assistant-events','--accept-capabilities']);
   }
   await waitFor(async () => { const result = await invoke('ha_events_status'); return result.result.details?.synchronized; });
-  if (activationProbe) {
+  for (const options of [{ method: 'POST' }, { method: 'POST', headers: { Authorization: 'Bearer incorrect' } }, { method: 'GET' }]) {
+    const response = await fetch(`http://127.0.0.1:${gatewayPort}/plugins/openclaw-home-assistant-events/internal-wake`, options);
+    assert.equal(response.status, 403, 'Internal wake must reject missing/incorrect credentials and GET');
+  }
+  if (activationProbe && !hotDispatchProbe) {
     console.log('PASS: protected store credential resolves during live activation and HA listener synchronizes.');
   } else {
     await cli(['agent','--agent','main','--message','CONTEXT_CHURCH_782: remind me about ProPresenter when I arrive at church. Use the synthetic ha-test channel for this test.','--json']);
@@ -111,8 +116,8 @@ try {
     const receipts = () => readFile(join(temporary,'receipts.jsonl'),'utf8');
     await waitFor(async()=>{try{return (await receipts()).trim().split('\n').length === 1;}catch{return false;}});
     const history = await cli(['gateway','call','chat.history','--params',JSON.stringify({ sessionKey:'agent:main:main' }),'--json']);
-    assert(history.includes('home_assistant_event')); assert(history.includes('CONTEXT_CHURCH_782'));
-    console.log('PASS: matched event persisted in the original conversation; public chat.history exposes it; normal message tool sent once to the synthetic channel.');
+    assert(!history.includes('home_assistant_event'), 'Internal event input must stay hidden'); assert(history.includes('CONTEXT_CHURCH_782'), 'Original conversation must stay visible'); assert(history.includes('Synthetic event received.'), 'Agent reply must stay visible');
+    console.log('PASS: matched event persisted in the original conversation; public chat.history hides the internal input and retains the agent reply; normal message tool sent once to the synthetic channel.');
     await invoke('ha_events_subscribe', { entityId:'sensor.mock', trigger:{type:'state',to:'off'}, instruction:'Second synthetic reminder.' });
     const priorCalls = captures.length; stall = true; emit('off');
     await waitFor(async () => { const result=await invoke('ha_events_status'); return captures.length > priorCalls && result.result.details.deliveries.some(delivery=>delivery.status==='running'); });
