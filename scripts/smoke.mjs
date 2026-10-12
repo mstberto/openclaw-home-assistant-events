@@ -26,7 +26,7 @@ const mock = createServer((request, response) => {
     if (eventTurn) assert(eventId, 'Synthetic event ID must be readable');
     const send = eventTurn && !input.messages.slice(lastUser + 1).some(message => message.role === 'tool');
     response.writeHead(200, { 'Content-Type': 'text/event-stream' });
-    response.end('data: ' + JSON.stringify({ id: 'mock-completion', object: 'chat.completion.chunk', created: 1, model: 'mock', choices: [{ index: 0, delta: send ? { role: 'assistant', tool_calls: [{ index: 0, id: 'synthetic_send', type: 'function', function: { name: 'message', arguments: JSON.stringify({ action: 'send', channel: 'ha-test', target: '123', message: `Synthetic church reminder: ${eventId}` }) } }] } : { role: 'assistant', content: 'Synthetic event received.' }, finish_reason: null }] })
+    response.end('data: ' + JSON.stringify({ id: 'mock-completion', object: 'chat.completion.chunk', created: 1, model: 'mock', choices: [{ index: 0, delta: send ? { role: 'assistant', tool_calls: [{ index: 0, id: 'synthetic_send', type: 'function', function: { name: 'message', arguments: JSON.stringify({ action: 'send', channel: 'ha-test', target: '123', message: `Synthetic sensor alert: ${eventId}` }) } }] } : { role: 'assistant', content: 'Synthetic event received.' }, finish_reason: null }] })
       + '\n\ndata: ' + JSON.stringify({ id: 'mock-completion', object: 'chat.completion.chunk', created: 1, model: 'mock', choices: [{ index: 0, delta: {}, finish_reason: send ? 'tool_calls' : 'stop' }], usage: { prompt_tokens: 10, completion_tokens: 5, total_tokens: 15 } }) + '\n\ndata: [DONE]\n\n');
   });
 });
@@ -104,19 +104,19 @@ try {
   if (activationProbe && !hotDispatchProbe) {
     console.log('PASS: protected store credential resolves during live activation and HA listener synchronizes.');
   } else {
-    await cli(['agent','--agent','main','--message','CONTEXT_CHURCH_782: remind me about ProPresenter when I arrive at church. Use the synthetic ha-test channel for this test.','--json']);
-    await invoke('ha_events_subscribe', { entityId: 'sensor.mock', trigger: { type: 'state', to: 'on' }, instruction: 'Remind me about ProPresenter.' });
+    await cli(['agent','--agent','main','--message','CONTEXT_SENSOR_782: notify me when the test sensor turns on. Use the synthetic ha-test channel for this test.','--json']);
+    await invoke('ha_events_subscribe', { entityId: 'sensor.mock', trigger: { type: 'state', to: 'on' }, instruction: 'Notify me that the test sensor turned on.' });
     const emit = state => {
       const at = new Date().toISOString(); const before = currentState; currentState = state;
       haSocket.send(JSON.stringify({ id: 1, type: 'event', event: { event_type: 'state_changed', time_fired: at, data: { entity_id: 'sensor.mock', old_state: entityState(before, new Date(Date.now()-10000).toISOString()), new_state: entityState(state, at) } } }));
     };
     emit('on');
     await waitFor(async () => { const result = await invoke('ha_events_status'); return result.result.details.deliveries.some(delivery => delivery.status === 'delivered'); });
-    assert(captures.some(input => JSON.stringify(input.messages).includes('CONTEXT_CHURCH_782') && JSON.stringify(input.messages).includes('home_assistant_event')));
+    assert(captures.some(input => JSON.stringify(input.messages).includes('CONTEXT_SENSOR_782') && JSON.stringify(input.messages).includes('home_assistant_event')));
     const receipts = () => readFile(join(temporary,'receipts.jsonl'),'utf8');
     await waitFor(async()=>{try{return (await receipts()).trim().split('\n').length === 1;}catch{return false;}});
     const history = await cli(['gateway','call','chat.history','--params',JSON.stringify({ sessionKey:'agent:main:main' }),'--json']);
-    assert(!history.includes('home_assistant_event'), 'Internal event input must stay hidden'); assert(history.includes('CONTEXT_CHURCH_782'), 'Original conversation must stay visible'); assert(history.includes('Synthetic event received.'), 'Agent reply must stay visible');
+    assert(!history.includes('home_assistant_event'), 'Internal event input must stay hidden'); assert(history.includes('CONTEXT_SENSOR_782'), 'Original conversation must stay visible'); assert(history.includes('Synthetic event received.'), 'Agent reply must stay visible');
     console.log('PASS: matched event persisted in the original conversation; public chat.history hides the internal input and retains the agent reply; normal message tool sent once to the synthetic channel.');
     await invoke('ha_events_subscribe', { entityId:'sensor.mock', trigger:{type:'state',to:'off'}, instruction:'Second synthetic reminder.' });
     const priorCalls = captures.length; stall = true; emit('off');
