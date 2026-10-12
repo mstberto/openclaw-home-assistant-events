@@ -1,8 +1,13 @@
 # Release readiness
 
-0.1.0 is an implementation candidate held in a private repository. No npm publication or deployment to a running user installation is part of this work.
+0.1.4 includes the plugin-only admission fix and hidden event input. The user confirmed successful native Codex handoff, an alert, and hidden input in the macOS client with 0.1.4-rc.4. This live pilot complements the disposable Gateway tests; it is not certification of every platform or channel. Repository publication and npm publication still require owner approval.
+
+
+0.1.4-rc.4 is a candidate held for native Codex visibility validation. The user reported successful native Codex handoff and an alert with 0.1.4-rc.3; the new hidden-input behavior still needs a live check. No npm publication or automated deployment to a running user installation is part of this work.
 
 ## Verified locally
+
+- The hardened internal loopback wake passed on the unchanged 2026.9.9 host after live enable: exact-session persistence, one synthetic agent message, actual process crash/recovery, no replay, and explicit review. It uses only public plugin APIs and no Gateway admin credential. Unit coverage includes one-use authentication, body/method/non-loopback rejection, concurrency, deadline/disconnect cancellation, cleanup, redirects, backoff, and no wake for idle/disallowed work.
 
 - Strict TypeScript compiles against the published OpenClaw 2026.9.9 declarations.
 - Automated tests cover ownership, disallowed-owner suspension, indexed matching, numeric crossings, one-shots, duplicates, microsecond transitions, duration cancellation/restart, outbox retries, accepted-run observations, atomic file persistence, corruption, lock exclusion, scheduler shutdown, and the HA protocol/reconnect lifecycle.
@@ -29,5 +34,7 @@ The manual release workflow creates a tarball artifact only; it never changes re
 ## Dispatch pivot validation
 
 Normal-agent dispatch replaces the restricted subagent API. Unit tests cover transcript receipt/invalidation, no replay of delivered/uncertain work, preflight-only retries, running reservation before effects, failed reservation/final writes, interrupted recovery, review ownership and duplicate-risk acknowledgement, and exact session identity guards. The disposable integration uses only synthetic credentials/transport/model and a separate Gateway state directory. Live Alice deployment is not authorized by these results. Automatic live dashboard refresh and real external delivery have not been claimed.
+
+The prior direct-timer path failed after hot activation because it inherited a released Gateway root. The candidate invokes dispatch inside its own authenticated loopback HTTP request. Direct Gateway TLS and tailnet-only listening remain unsupported; service startup reports those configurations explicitly. See [plugin-only admission investigation](plugin-only-admission-investigation.md). No host patch is shipped.
 
 The disposable OpenClaw Control UI was also opened and inspected: it displayed the original request, both matched-event payloads, standard message-tool output, and the host's restart-recovery notice in the same Main Session. This validates history rendering after connection/reload; automatic live push updates and Alice's real notification channels remain separate checks.
