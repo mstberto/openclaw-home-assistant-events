@@ -2,7 +2,7 @@
 
 Confirmed on the unchanged published OpenClaw 2026.9.9 Gateway using synthetic
 HA, a mock model, and a synthetic message channel after live plugin enable.
-Alice's running installation was not modified.
+The production installation was not modified.
 
 ## Working public API path
 

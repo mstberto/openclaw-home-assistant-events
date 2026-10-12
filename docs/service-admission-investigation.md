@@ -1,6 +1,6 @@
 # Service admission investigation
 
-Tested against the published OpenClaw 2026.9.9 package. No running Alice files,
+Tested against the published OpenClaw 2026.9.9 package. No production installation files,
 configuration, subscriptions, or delivery records were modified.
 
 ## Confirmed failure
@@ -49,7 +49,7 @@ scheduled-session-turn implementation returns without scheduling for non-bundled
 plugins. Moving to that API is not an equivalent third-party fix. Subagent and
 hook alternatives retain the previously documented limitations.
 
-Do not ship a private core import, change trusted-plugin identity, patch Alice's
+Do not ship a private core import, change trusted-plugin identity, patch the production installation's
 installed core, or automatically replay uncertain production events. The clean
 direction is a reviewed host correction or supported SDK capability, followed by
 the hot-activation regression and native Codex validation.
