@@ -4,7 +4,7 @@ A small TypeScript plugin for persistent, agent-owned smart-home event subscript
 
 This complements the official Home Assistant MCP server. MCP handles discovery, current state, and control. This plugin handles future state transitions, numeric crossings, and sustained states. It never calls Home Assistant control services, selects a notification channel, or injects unmatched events into chat.
 
-**Status:** 0.1.3 candidate, MIT licensed. Repository remains private pending publication approval. Supported host: **OpenClaw 2026.9.9**, Node **24.16+ on the 24.x line or 26.1+**. SDK contracts are experimental; other host versions are not claimed compatible. See [verified contracts](docs/sdk-contracts.md) and [release readiness](docs/release-readiness.md).
+**Status:** 0.1.4, MIT licensed. Repository remains private pending publication approval. Supported host: **OpenClaw 2026.9.9**, Node **24.16+ on the 24.x line or 26.1+**. SDK contracts are experimental; other host versions are not claimed compatible. See [verified contracts](docs/sdk-contracts.md) and [release readiness](docs/release-readiness.md).
 
 ## Install in a test Gateway
 
@@ -16,7 +16,7 @@ npm run check
 npm pack
 ```
 
-Install the generated `openclaw-home-assistant-events-0.1.3.tgz` using OpenClaw's supported plugin installer, then enable `openclaw-home-assistant-events`. Package installation may require a Gateway restart. Do this in a separate test Gateway before enabling it in an existing installation.
+Install the generated `openclaw-home-assistant-events-0.1.4.tgz` using OpenClaw's supported plugin installer, then enable `openclaw-home-assistant-events`. Package installation may require a Gateway restart. Do this in a separate test Gateway before enabling it in an existing installation.
 
 The package ships built JavaScript, its manifest, documentation, and a short optional discoverability skill. Nothing requires the official HA MCP integration to be installed, although it is the recommended companion for entity discovery.
 
@@ -93,7 +93,13 @@ Use exact entity IDs, states, and units from HA MCP. A subscribe result contains
 
 A subscription captures its creating agent and exact session identity from OpenClaw's trusted tool context. Subscription arguments cannot choose a different session, owner, sender, or notification destination. A match continues that conversation through public `api.runtime.agent.runEmbeddedAgent`. The original history is available; save a self-contained instruction too, since conversations may later be compacted.
 
+Event inputs are tagged as this plugin's internal messages. A synchronous public transcript hook marks only those user-role inputs in their originating session as non-displayed. The full event remains persisted for the agent, receipts, and audit; ordinary user messages and agent replies remain visible. Installation review includes this transcript hook. Existing visible event messages are not retroactively changed.
+
 The plugin passes the captured sender, channel/account, and source route context and the current session permission mode. Normal host tool policy still applies; it does not force-enable message tools or request privileged grants. Reset/deletion fails closed rather than silently sending into a new conversation. Recreate the watcher after a reset. Subagent-created subscriptions are rejected. Legacy subscriptions without a source session need recreation; legacy accepted deliveries become uncertain for review.
+
+On OpenClaw 2026.9.9, timers started during live plugin activation can inherit an expired Gateway request context. The plugin obtains fresh admission through its own internal loopback HTTP route before dispatching one saved event. This requires no Gateway update or admin token and does not send a user notification. Each request uses a random, in-memory, one-use credential; the route rejects non-loopback peers, request bodies, wrong methods, and replayed credentials. Concurrent wake calls coalesce. The client follows no redirects, and service shutdown or a lost connection cancels the admitted dispatch while preserving uncertain-event review.
+
+The Gateway HTTP listener must accept connections on `127.0.0.1`. `loopback`, `lan`, and `auto` binding are compatible; a custom bind must be `127.0.0.1` or `0.0.0.0`. Gateway TLS and tailnet-only binding are not supported by this version. External TLS termination through an existing proxy can coexist with a loopback HTTP Gateway. Do not expose the internal route through a proxy or disable certificate checks. The plugin sends no idle wake requests; it makes one local request per due delivery. Requests stay open through the agent attempt, with an overall deadline of the configured agent timeout plus 30 seconds. A deadline or disconnect may leave an uncertain event; it never proves that the agent performed no action.
 
 Payload shape:
 
@@ -167,6 +173,7 @@ Preflight retries use exponential backoff and twelve attempts. The queue saves r
 ```sh
 npm run check
 npm run test:smoke
+npm run test:hot-dispatch
 npm pack --dry-run
 ```
 
