@@ -9,10 +9,27 @@ async function queued() {
   await engine.snapshot([state('off', time - 1)]); await engine.event(event('off','on', time + 1));
   return { ...fixture, engine };
 }
-function dispatcher(action: () => Promise<{ persisted: boolean }> = async () => ({ persisted: true })) {
+function dispatcher(action: () => Promise<{ persisted: boolean; failureReason?: string }> = async () => ({ persisted: true })) {
   const execute = vi.fn(action); return { prepare: vi.fn(() => ({ execute })), execute };
 }
 describe('handoff outbox', () => {
+  it('wakes only for due allowed work and processes one event per admitted request', async () => {
+    const { repository, engine } = await queued();
+    await engine.subscribe('main', { entityId: 'sensor.test', trigger: { type: 'state', to: 'off' }, instruction: 'Second event' }, undefined,
+      { sessionKey: 'agent:main:main', sessionId: '11111111-1111-4111-8111-111111111111', senderIsOwner: false });
+    await engine.event(event('on', 'off', time + 2));
+    const dispatch = dispatcher(); const outbox = new Outbox(repository, dispatch, ['main'], () => time);
+    expect(await new Outbox(repository, dispatch, [], () => time).hasDueWork()).toBe(false);
+    expect(await outbox.hasDueWork()).toBe(true);
+    await outbox.drain(undefined, 1); expect(dispatch.execute).toHaveBeenCalledOnce();
+    expect(await outbox.hasDueWork()).toBe(true);
+    await outbox.drain(undefined, 1); expect(await outbox.hasDueWork()).toBe(false);
+  });
+  it('does not reserve an event when its wake request was already cancelled', async () => {
+    const { repository } = await queued(); const dispatch = dispatcher(); const controller = new AbortController(); controller.abort();
+    await new Outbox(repository, dispatch, ['main'], () => time).drain(controller.signal, 1);
+    expect(dispatch.execute).not.toHaveBeenCalled(); expect((await repository.read()).deliveries[0]?.status).toBe('pending');
+  });
   it('commits running before effects, retains delivered history, and never replays it', async () => {
     const { repository } = await queued();
     const dispatch = dispatcher(async () => { expect((await repository.read()).deliveries[0]?.status).toBe('running'); return { persisted: true }; });
@@ -34,6 +51,15 @@ describe('handoff outbox', () => {
     const outbox = new Outbox(repository, dispatch, ['main'], () => time);
     await outbox.drain(); await outbox.drain(); expect(dispatch.execute).toHaveBeenCalledTimes(1);
     expect((await repository.read()).deliveries[0]?.status).toBe('uncertain');
+  });
+  it('retains a dispatch diagnostic while keeping uncertain work out of automatic retries', async () => {
+    const { repository } = await queued();
+    const reason = 'Runtime failure: inactive runtime; manual review required';
+    const dispatch = dispatcher(async () => ({ persisted: false, failureReason: reason }));
+    const outbox = new Outbox(repository, dispatch, ['main'], () => time);
+    await outbox.drain(); await outbox.recover(); await outbox.drain();
+    expect((await repository.read()).deliveries[0]).toMatchObject({ status: 'uncertain', reason });
+    expect(dispatch.execute).toHaveBeenCalledOnce();
   });
   it('converts interrupted running and legacy accepted records to uncertain on startup', async () => {
     const { repository } = await queued(); const dispatch = dispatcher();
