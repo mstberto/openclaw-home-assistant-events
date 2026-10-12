@@ -164,7 +164,7 @@ Preflight retries use exponential backoff and twelve attempts. The queue saves r
 
 - HA's live stream has no durable replay. Events during disconnects or processing failures may be missed. Snapshots reconcile duration conditions but do not invent missed state/numeric transitions.
 - Embedded run IDs are not host idempotency keys. Automatic replay of interrupted execution is deliberately prohibited. Pending events survive restart; running events become uncertain.
-- Transcript handoff does not prove the agent executed its task or sent a notification. Real channel/UI delivery and host permissions remain the agent/host's responsibility. The smoke test exercises a real message tool against a synthetic transport and reads history through the Gateway's public `chat.history` API; it is not a test of Alice's live channels or automatic UI push updates.
+- Transcript handoff does not prove the agent executed its task or sent a notification. Real channel/UI delivery and host permissions remain the agent/host's responsibility. The smoke test exercises a real message tool against a synthetic transport and reads history through the Gateway's public `chat.history` API; it is not a test of a production installation's live channels or automatic UI push updates.
 - Normal chat turns and event turns share session sequencing. Reset/deletion can invalidate a queued event. Events may wait behind a long foreground turn.
 - Persistence assumes a local POSIX filesystem with atomic rename, directory fsync, and reliable lock timestamps. Network filesystems and Windows durability have not been validated.
 
